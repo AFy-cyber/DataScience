@@ -1,0 +1,241 @@
+---
+title   : "ANALISIS SENTIMEN PADA POSTINGAN BENCANA ALAM MEDIA SOSIAL TWITTER"
+author  : "Adnan Fadhil Yaser"
+          "Istian Muhammad Wahyu Setiawan "
+NIM     : "123190098"
+          "123190107"
+date: "12/20/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## library
+
+Memanggil library yang akan digunakan dalam proses analisis Sentiment
+
+```{r}
+library(dplyr)
+library(tidytext)
+library(tidyr)
+library(wordcloud2)
+library(janeaustenr)
+library(tidyverse)
+library(SnowballC)
+library(e1071)
+library(caret)
+library(tm)
+library(sentimentr)
+library(ggplot2)
+
+```
+
+
+## Import Dataset
+
+```{r}
+df <- read.csv('tweets.csv')
+
+```
+
+## Cleaning Data
+
+Menghapus element-element dalam teks yang terbilang mengganggu proses analisis seperti simbol : $%^@#!@!@^
+dan kata yang termasuk tidak penting dalam proses analisis
+
+```{r}
+# Mengambil collumn teks tweets bencana
+text <- df$text
+# Menetapkan teks menjadi lowercase
+text <- tolower(text)
+# Menghapus mentions, url, emoji, nomor, tanda baca, dan lain-lain
+text <- gsub("@\\w+", "", text)
+text <- gsub("https?://.+", "", text)
+text <- gsub("\\d+\\w*\\d*", "", text)
+text <- gsub("#\\w+", "", text)
+text <- gsub("[^\x01-\x7F]", "", text)
+text <- gsub("[[:punct:]]", " ", text)
+# Menghapus spasi dan baris kosong
+text <- gsub("\n", " ", text)
+text <- gsub("^\\s+", "", text)
+text <- gsub("\\s+$", "", text)
+text <- gsub("[ |\t]+", " ", text)
+
+# Menaruh data kembali ke dataset
+df["text"] <- text
+```
+
+
+## Sentimen Analisis
+
+```{r}
+# Melakukan sentiment analysis dengan fungsi sentiment_by
+sentiment_text <- sentiment_by(df$text, by = NULL)
+# Melihat ringkasan statistik dari skor sentiment yang dihiting
+summary(sentiment_text$ave_sentiment)
+
+# Visualisasi statistik ringkasan
+qplot(sentiment_text$ave_sentiment,   geom="histogram",binwidth=0.1,main="Review Sentiment Histogram")
+df$ave_sentiment=sentiment_text$ave_sentiment
+df$sd_sentiment=sentiment_text$sd
+
+
+```
+
+## Menghapus stop-words
+
+
+```{r}
+tidy_Ver <-df %>%
+  unnest_tokens(word,text)
+#menghapus stop-words
+matchword <- tidy_Ver %>%
+  anti_join(get_stopwords())
+matchword
+
+```
+
+## Menghitung frekuensi kata dalam dataset
+
+```{r}
+#Calculate word fre
+matchword %>%
+  #distinct(word)
+  count(word, sort=TRUE)
+```
+
+## Melakukan sentiment analisis per-kata 
+
+  Melakukan sentiment analisis per-kata dalam teks tweets dan menampilkan frekuensi kata
+  sentiment positif dan negatif dalam bentuk chart.
+
+```{r}
+bing_word_counts <- matchword %>%
+  inner_join(get_sentiments("bing")) %>%
+  count(word, sentiment, sort = TRUE) %>%
+  ungroup()
+
+bing_word_counts %>%
+  group_by(sentiment) %>%
+  slice_max(n, n = 10) %>% 
+  ungroup() %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(n, word, fill = sentiment)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~sentiment, scales = "free_y") +
+  labs(x = "Contribution to sentiment",
+       y = NULL)
+
+```
+
+
+## Membuat wordcloud sentiment positive
+
+Membuat word cloud sentiment positive dengan menggunakan bing sentiment untuk memilah kata
+
+```{r}
+matchword %>%
+  inner_join(get_sentiments("bing")) %>%
+  filter(sentiment == "positive") %>%
+  count(word, sort=TRUE) %>%
+  head(100) %>%
+  wordcloud2(size = 1.5, shape = "triangle-forward",
+             color = c("steelblue","firebrick","darkorchid"),
+             backgroundColor="salmon")
+```
+
+
+## Membuat wordcloud sentiment negative
+
+Membuat word cloud sentiment negative dengan menggunakan bing sentiment untuk memilah kata
+
+
+```{r}
+matchword %>%
+  inner_join(get_sentiments("bing")) %>%
+  filter(sentiment == "negative") %>%
+  count(word, sort=TRUE) %>%
+  head(100) %>%
+  wordcloud2(size = .4, shape = "triangle-forward",
+             color = c("firebrick","steelblue","darkorchid"),
+             backgroundColor="white")
+```
+## Preprocessing data
+
+Membangun Corpus dan menghapus tanda baca, stopwords, spasi 
+
+
+```{r}
+doc <- VCorpus(VectorSource(df$text))
+
+doc <- tm_map(doc, tolower) #change it to lower case
+doc <- tm_map(doc, removeNumbers) #removing words
+doc <- tm_map(doc, removeWords, stopwords(kind = 'en'))#removing stopwords
+doc <- tm_map(doc, removePunctuation) #we should not remove punctuations since its a tweet
+doc <- tm_map(doc, stripWhitespace)#remove unwanted white spaces
+doc <- tm_map(doc, stemDocument)#creating stem document
+
+
+```
+## Membuat matriks istilah dokumen
+
+```{r}
+
+doc <- tm_map(doc, PlainTextDocument)
+dtm <- DocumentTermMatrix(doc)
+dim(dtm)
+```
+
+
+```{r}
+dense_dtm <- removeSparseTerms(dtm, 0.995)
+dim(dense_dtm)
+```
+
+```{r}
+tw_dtm <- as.data.frame(as.matrix(dense_dtm))
+colnames(tw_dtm) <- make.names(colnames(tw_dtm))
+
+train_dtm <- tw_dtm[1:8000,]
+test_dtm <- tw_dtm[8001:8020,]
+```
+
+## Sentiment Text
+
+Menetapkan sentiment teks menggunakan average sentiment sebagai kunci
+  Apabila average sentiment dari teks memiliki nilai 0->1 maka sentimentnya positif
+  Dan apabila average sentiment dari teks memiliki nilai (-1)->0 maka sentiment negatif
+```{r}
+df <- df%>%
+  mutate(Sentiment = if_else(ave_sentiment>0,"Positive","Negative"))
+```
+
+## Membagi set training dan Validasi
+
+```{r}
+set.seed(133)
+id <- sample(8000,8000*.75)
+t_dtm <- head(train_dtm[id,],3000)
+ty_ <- head(df$Sentiment[id],3000)
+v_dtm <- train_dtm[-id,]
+vy_ <- head(df$Sentiment[-id],3000)
+```
+
+## Implementasi Naive bayes
+
+```{r}
+class_nb <- naiveBayes(x=t_dtm,y=ty_,laplace = 100, na.action)
+class_pred <- predict(class_nb, t_dtm)#validation-0.6751 train-0.6827
+tab <- table(class_pred, ty_)
+confusionMatrix(tab)
+
+```
+
+## Mengetes data
+```{r}
+class_pred <- predict(class_nb,test_dtm)
+class_pred
+```
+
